@@ -17,7 +17,7 @@ Four (Slack channel → repo, branch) pairs, each treated independently:
 2. `backend-server` @ `total-media-master` (separate deploy of the same repo
    to a different system)
 3. `frontend-b2b` @ `master`
-4. `frontend-b2c` @ `master`
+4. `frontend-b2c` @ `main`
 
 Slack messages in each channel contain an error message plus a stack trace
 (confirmed format — not just a bare summary).
