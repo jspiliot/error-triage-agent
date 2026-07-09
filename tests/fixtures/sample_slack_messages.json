@@ -1,0 +1,8 @@
+{
+  "messages": [
+    {
+      "ts": "1720512000.000100",
+      "text": "NullPointerException: Cannot read property 'id' of undefined\n  at UserController.getProfile (src/controllers/UserController.js:42)\n  at Router.handle (src/router.js:88)"
+    }
+  ]
+}
