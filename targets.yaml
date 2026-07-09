@@ -1,19 +1,17 @@
-# Fill in slack_channel_id and repo (org/name) before the first real run.
-# See README.md "Prerequisites" for what's needed.
 targets:
   - name: backend-server-master
-    slack_channel_id: REPLACE_ME_SLACK_CHANNEL_ID
-    repo: REPLACE_ME_ORG/backend-server
+    slack_channel_id: C07SE0G64RE
+    repo: adadot/backend-server
     branch: master
   - name: backend-server-total-media
-    slack_channel_id: REPLACE_ME_SLACK_CHANNEL_ID
-    repo: REPLACE_ME_ORG/backend-server
+    slack_channel_id: C08F4E0EQHE
+    repo: adadot/backend-server
     branch: total-media-master
   - name: frontend-b2b
-    slack_channel_id: REPLACE_ME_SLACK_CHANNEL_ID
-    repo: REPLACE_ME_ORG/frontend-b2b
+    slack_channel_id: C08F4EQ6QU8
+    repo: adadot/frontend-b2b
     branch: master
   - name: frontend-b2c
-    slack_channel_id: REPLACE_ME_SLACK_CHANNEL_ID
-    repo: REPLACE_ME_ORG/frontend-b2c
+    slack_channel_id: C07T0553GQY
+    repo: adadot/frontend-b2c
     branch: main

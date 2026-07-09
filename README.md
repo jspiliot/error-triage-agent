@@ -1,22 +1,28 @@
 # error-triage-agent
 
 Daily Claude Code scheduled routine that reads error logs posted to Slack
-for 4 deployment targets, investigates root causes, and opens a PR with a
-tested fix when confident — or replies in the Slack thread with its
-findings when it isn't.
+for 4 deployment targets (GitLab repos under `gitlab.com/adadot`),
+investigates root causes, and opens a merge request (MR) with a tested fix
+when confident — or replies in the Slack thread with its findings when it
+isn't.
 
 ## Prerequisites
 
 Before the daily schedule can run for real, gather:
 
 - A Slack bot token (`SLACK_BOT_TOKEN`) with `channels:history` and
-  `chat:write` scopes, invited into all 5 channels below.
+  `chat:write` scopes, invited into all 5 channels below. (Use a dedicated
+  Slack app for this bot if your main app can't add `chat:write`.)
 - The 4 target channel IDs (one per row in `targets.yaml`).
 - A new `#error-triage-agent` Slack channel, with the bot invited, and its
   channel ID (`ERROR_TRIAGE_REPORT_CHANNEL_ID`).
-- Confirmation that the environment running the schedule has `gh` access
-  (push + PR create) to `backend-server`, `frontend-b2b`, and
-  `frontend-b2c`.
+- A GitLab Personal Access Token (`GITLAB_TOKEN`, `api` +
+  `write_repository` scopes) with Developer+ access to `backend-server`,
+  `frontend-b2b`, and `frontend-b2c`. (Group/Project Access Tokens are
+  preferred for isolation but may be disabled by org policy — a Personal
+  Access Token is the fallback.)
+- The GitLab username to request as MR reviewer
+  (`GITLAB_REVIEWER_USERNAME`).
 
 ## Setup
 
@@ -30,12 +36,12 @@ Before the daily schedule can run for real, gather:
 `AGENT.md` is the runbook a Claude Code `/schedule` routine executes once a
 day. See that file for the full step-by-step flow. In short: for each of
 the 4 targets, it fetches new Slack messages, skips ones already handled
-(via a GitHub PR/branch dedup check), investigates root cause, and either
-opens a PR or replies in the Slack thread.
+(via a GitLab MR/branch dedup check), investigates root cause, and either
+opens an MR or replies in the Slack thread.
 
 ## Dry-run validation
 
-`AGENT.md` supports `DRY_RUN=true` (no pushes/PRs/real Slack replies — logs
+`AGENT.md` supports `DRY_RUN=true` (no pushes/MRs/real Slack replies — logs
 intended actions to `#error-triage-agent` instead) and `DRY_RUN_FIXTURE`
 (reads messages from a local JSON file instead of the Slack API). See
 `tests/fixtures/sample_slack_messages.json` for the fixture format, and the

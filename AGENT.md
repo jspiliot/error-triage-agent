@@ -1,8 +1,12 @@
 # Error Triage Agent — Daily Run Instructions
 
 Once a day, triage new error messages posted to 4 Slack channels (one per
-deployment target), investigate root cause, and either open a PR with a
-tested fix or reply in the Slack thread with findings.
+deployment target), investigate root cause, and either open a merge
+request (MR) with a tested fix or reply in the Slack thread with findings.
+
+Target repos live on GitLab (`gitlab.com/adadot/...`). All GitLab
+interaction uses the REST API directly via `curl` and `PRIVATE-TOKEN` auth
+— there is no `glab` CLI dependency.
 
 ## Environment
 
@@ -10,14 +14,38 @@ tested fix or reply in the Slack thread with findings.
   scopes on the 4 target channels and the report channel.
 - `ERROR_TRIAGE_REPORT_CHANNEL_ID` — Slack channel ID for
   `#error-triage-agent`.
+- `GITLAB_TOKEN` — Personal Access Token (`api` + `write_repository`
+  scopes) used for both the REST API calls below and for git clone/push
+  over HTTPS.
+- `GITLAB_REVIEWER_USERNAME` — GitLab username to request as MR reviewer
+  (currently `j.spiliot`).
 - `DRY_RUN` — optional, `"true"` or unset. When `"true"`, never push
-  branches, open PRs, or post to target-channel Slack threads; log intended
-  actions to the report channel instead, each line prefixed `[DRY RUN]`.
+  branches, open MRs, or post to target-channel Slack threads; log
+  intended actions to the report channel instead, each line prefixed
+  `[DRY RUN]`.
 - `DRY_RUN_FIXTURE` — optional, path to a JSON file of fixture Slack
   messages (`{"messages": [{"ts": "...", "text": "..."}]}`, see
   `tests/fixtures/sample_slack_messages.json`). When set, use this file's
   `messages` array instead of calling the Slack API for every target's
   fetch step — used only for local validation.
+
+## GitLab REST API conventions
+
+Every target's `repo` field (e.g. `adadot/backend-server`) needs
+URL-encoding for the GitLab API's `:id` path segment (these paths have
+exactly one `/`, so a plain substitution is safe):
+
+```bash
+project_path_encoded=$(echo "<repo>" | sed 's/\//%2F/g')
+```
+
+Resolve the reviewer's GitLab user ID once at the start of the run (reused
+for every MR this run creates):
+
+```bash
+reviewer_id=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+  "https://gitlab.com/api/v4/users?username=$GITLAB_REVIEWER_USERNAME" | jq -r '.[0].id')
+```
 
 ## Steps
 
@@ -25,7 +53,10 @@ tested fix or reply in the Slack thread with findings.
    JSON array; each object has `name`, `slack_channel_id`, `repo`,
    `branch`, `max_errors_per_run`.
 
-2. For each target, in the order given by `targets.yaml`:
+2. Resolve `reviewer_id` (see above) — abort the run (see step 5) if this
+   lookup fails, since every MR needs it.
+
+3. For each target, in the order given by `targets.yaml`:
 
    a. **Get the cursor:**
       `python3 scripts/cursor_store.py get state/cursors.json <name>`
@@ -53,18 +84,19 @@ tested fix or reply in the Slack thread with findings.
         from the message text.
       - Compute the signature:
         `python3 scripts/build_signature.py "<exception_type>" "<frame1>" ["<frame2>"]`
-      - **Dedup check** — skip this message entirely (no PR, no Slack
+      - **Dedup check** — skip this message entirely (no MR, no Slack
         reply) if either matches:
-        - `gh search prs --repo <repo> --state open "<signature>"` returns
-          a result, or
-        - `gh api repos/<repo>/branches --jq '.[].name'` contains a line
-          equal to `autofix/<signature>`.
+        - `curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" "https://gitlab.com/api/v4/projects/$project_path_encoded/merge_requests?state=opened&search=<signature>"`
+          returns a non-empty JSON array, or
+        - `curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" "https://gitlab.com/api/v4/projects/$project_path_encoded/repository/branches?search=autofix/<signature>"`
+          returns a non-empty JSON array.
       - **Investigate:** clone `<repo>` at `<branch>` into a scratch
-        directory (`git clone --branch <branch> --single-branch
-        <repo-url> <scratch-dir>`), then use the stack trace to locate the
-        offending code and read enough surrounding context to form a
-        root-cause hypothesis. Confirm the hypothesis against the actual
-        code before proposing a fix — do not guess.
+        directory:
+        `git clone --branch <branch> --single-branch "https://oauth2:$GITLAB_TOKEN@gitlab.com/<repo>.git" <scratch-dir>`
+        then use the stack trace to locate the offending code and read
+        enough surrounding context to form a root-cause hypothesis.
+        Confirm the hypothesis against the actual code before proposing a
+        fix — do not guess.
       - **Decide confidence.** You have a confident fix only if you can
         point to the specific lines causing the behavior described by the
         exception/stack trace, and the fix is a direct correction of that
@@ -75,35 +107,44 @@ tested fix or reply in the Slack thread with findings.
         - Add a regression test reproducing the original error, if the
           repo's existing test setup makes this feasible.
         - Run the relevant existing test suite for the changed area.
-        - If tests pass: push the branch and open the PR (in `DRY_RUN`,
-          skip the push/PR and instead log the intended title/body to the
-          report channel prefixed `[DRY RUN]`):
+        - If tests pass: push the branch and open the MR (in `DRY_RUN`,
+          skip the push/MR and instead log the intended title/description
+          to the report channel prefixed `[DRY RUN]`):
+          ```bash
+          git push origin autofix/<signature>
+          curl -s --request POST --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data '{
+              "source_branch": "autofix/<signature>",
+              "target_branch": "<branch>",
+              "title": "[auto-fix] <short exception summary>",
+              "description": "<body>",
+              "reviewer_ids": ['"$reviewer_id"'],
+              "remove_source_branch": true
+            }' \
+            "https://gitlab.com/api/v4/projects/$project_path_encoded/merge_requests"
           ```
-          gh pr create --repo <repo> --base <branch> --head autofix/<signature> \
-            --title "[auto-fix] <short exception summary>" \
-            --body "<body>" --reviewer jspiliot
-          ```
-          The PR body must include: (1) the original Slack error text and
-          a link to the message, (2) root-cause explanation, (3) what the
-          fix changes and why, (4) test/verification results.
+          The MR description must include: (1) the original Slack error
+          text and a link to the message, (2) root-cause explanation, (3)
+          what the fix changes and why, (4) test/verification results.
         - If tests fail and cannot be resolved with reasonable effort:
           treat as **not confident** — fall through to the next bullet.
-          Never open a PR with failing tests.
+          Never open an MR with failing tests.
       - **If not confident (or tests failed):** reply in the original
         Slack thread (in `DRY_RUN`, skip the real post and log it to the
         report channel instead, prefixed `[DRY RUN]`):
-        ```
+        ```bash
         curl -s -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
           -H "Content-type: application/json" \
           --data '{"channel":"<slack_channel_id>","thread_ts":"<message ts>","text":"<summary>"}' \
           https://slack.com/api/chat.postMessage
         ```
         The summary must include: root-cause hypothesis (or "could not
-        determine"), files/areas examined, and why no PR was opened.
+        determine"), files/areas examined, and why no MR was opened.
       - Clean up the scratch clone.
 
    e. If any unhandled error occurs for this target as a whole (clone
-      failure, Slack/GitHub API error, etc.), log it, leave this target's
+      failure, Slack/GitLab API error, etc.), log it, leave this target's
       cursor unchanged so it's retried next run, and move on to the next
       target — never let one target's failure stop the run.
 
@@ -111,29 +152,30 @@ tested fix or reply in the Slack thread with findings.
       actually processed (or "now" if none were processed):
       `python3 scripts/cursor_store.py set state/cursors.json <name> <timestamp>`
 
-3. After all targets are processed, commit the updated state (in
+4. After all targets are processed, commit the updated state (in
    `DRY_RUN`, show the diff instead of committing/pushing):
-   ```
+   ```bash
    git add state/cursors.json
    git commit -m "Update cursors after daily run"
    git push
    ```
 
-4. Post a daily summary to `ERROR_TRIAGE_REPORT_CHANNEL_ID`: per target,
-   how many new errors were seen, how many PRs were opened (with links),
+5. Post a daily summary to `ERROR_TRIAGE_REPORT_CHANNEL_ID`: per target,
+   how many new errors were seen, how many MRs were opened (with links),
    how many got a Slack-only reply, and how many were skipped as
    duplicates.
 
-5. **Run-level failures** — anything not scoped to a single target (bad
-   `SLACK_BOT_TOKEN`, `gh` not authenticated, etc.) — abort the run
-   immediately and post an alert to `ERROR_TRIAGE_REPORT_CHANNEL_ID`
-   describing what failed, instead of continuing.
+6. **Run-level failures** — anything not scoped to a single target (bad
+   `SLACK_BOT_TOKEN`, bad `GITLAB_TOKEN`, reviewer lookup failure, etc.) —
+   abort the run immediately and post an alert to
+   `ERROR_TRIAGE_REPORT_CHANNEL_ID` describing what failed, instead of
+   continuing.
 
 ## Non-negotiables
 
 - Never commit or push directly to `master`/`main`/`total-media-master` —
-  every fix goes through a PR.
-- Never open a PR with failing tests.
+  every fix goes through an MR.
+- Never open an MR with failing tests.
 - Never skip the dedup check.
-- No area of the codebase is off-limits for a fix — the PR review is the
+- No area of the codebase is off-limits for a fix — MR review is the
   safety net, not a denylist.

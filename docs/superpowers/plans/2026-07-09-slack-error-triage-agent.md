@@ -2,6 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Correction (2026-07-10):** the target repos are on **GitLab**
+> (`gitlab.com/adadot/...`), not GitHub. Everywhere below that says `gh`,
+> "GitHub", or "PR", the as-built `AGENT.md` (Task 5) uses GitLab's REST
+> API via `curl` + `PRIVATE-TOKEN` auth and opens **merge requests**
+> instead — `GITLAB_TOKEN` and `GITLAB_REVIEWER_USERNAME` replace the `gh`
+> auth assumption. This document is left otherwise unchanged as a
+> historical record; `AGENT.md` and `README.md` are the source of truth.
+
 **Goal:** Build the `error-triage-agent` repo: config, state helpers, and the daily-run instructions document (`AGENT.md`) that a Claude Code `/schedule` cloud routine executes once a day to triage errors posted to 4 Slack channels and open PRs with tested fixes.
 
 **Architecture:** A handful of small, independently testable Python scripts (target loading, cursor state, signature hashing) provide deterministic building blocks. `AGENT.md` is a runbook consumed by the scheduled Claude routine at execution time — it is not itself executable code, so its own correctness is validated by a documented dry-run walkthrough rather than pytest.

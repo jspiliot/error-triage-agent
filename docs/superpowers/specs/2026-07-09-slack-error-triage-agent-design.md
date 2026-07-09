@@ -2,6 +2,14 @@
 
 Date: 2026-07-09
 
+> **Correction (2026-07-10):** the target repos are on **GitLab**
+> (`gitlab.com/adadot/...`), not GitHub. Everywhere below that says `gh`,
+> "GitHub", or "PR", the actual implementation (`AGENT.md`) uses GitLab's
+> REST API via `curl` + `PRIVATE-TOKEN` auth and opens **merge requests**
+> instead. This document is left otherwise unchanged as a historical
+> record of the original design reasoning — `AGENT.md` and `README.md` in
+> this repo are the source of truth for current behavior.
+
 ## Purpose
 
 A daily scheduled Claude agent that reads error logs posted to Slack for 4
