@@ -160,10 +160,22 @@ reviewer_id=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
    git push
    ```
 
-5. Post a daily summary to `ERROR_TRIAGE_REPORT_CHANNEL_ID`: per target,
-   how many new errors were seen, how many MRs were opened (with links),
-   how many got a Slack-only reply, and how many were skipped as
-   duplicates.
+5. Post a daily summary to `ERROR_TRIAGE_REPORT_CHANNEL_ID`. Keep it short
+   — this is a Slack message, not a run log:
+   - **Nothing happened anywhere** (no new errors, no MRs, no replies, no
+     duplicates skipped, across all targets): post exactly one line, e.g.
+     `✅ <date> — no new errors across all N targets.` Do not list targets
+     individually, do not mention cursors, reviewer resolution, or
+     DRY_RUN diff details — none of that belongs in the Slack summary.
+   - **Something happened somewhere:** post one line per target that had
+     any activity (new errors, MRs, replies, or duplicates > 0), and
+     *omit* targets with zero activity entirely — don't pad the message
+     with "no activity" lines for quiet targets. Each active target's
+     line: `<target>: <N> new, <M> MR(s) opened <links>, <R> replied,
+     <D> duplicate(s) skipped.` Only include the sub-counts that are
+     non-zero.
+   - In `DRY_RUN`, prefix the whole message `[DRY RUN]` once at the top
+     rather than repeating it per line.
 
 6. **Run-level failures** — anything not scoped to a single target (bad
    `SLACK_BOT_TOKEN`, bad `GITLAB_TOKEN`, reviewer lookup failure, etc.) —
