@@ -19,6 +19,11 @@ interaction uses the REST API directly via `curl` and `PRIVATE-TOKEN` auth
   over HTTPS.
 - `GITLAB_REVIEWER_USERNAME` — GitLab username to request as MR reviewer
   (currently `j.spiliot`).
+- `GITHUB_TOKEN` — Personal Access Token (`repo` scope) with write access
+  to *this* repo (`error-triage-agent` itself, not the GitLab targets).
+  The platform's built-in GitHub source checkout is read-only, so pushing
+  the updated `state/cursors.json` back (step 3) requires this separate
+  credential over HTTPS, the same pattern as `GITLAB_TOKEN`.
 - `DRY_RUN` — optional, `"true"` or unset. When `"true"`, never push
   branches, open MRs, or post to target-channel Slack threads; log
   intended actions to the report channel instead, each line prefixed
@@ -153,12 +158,19 @@ reviewer_id=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
       `python3 scripts/cursor_store.py set state/cursors.json <name> <timestamp>`
 
 4. After all targets are processed, commit the updated state (in
-   `DRY_RUN`, show the diff instead of committing/pushing):
+   `DRY_RUN`, show the diff instead of committing/pushing). The platform's
+   own checkout of this repo is read-only, so push using `GITHUB_TOKEN`
+   explicitly rather than a bare `git push`:
    ```bash
    git add state/cursors.json
    git commit -m "Update cursors after daily run"
-   git push
+   git push "https://${GITHUB_TOKEN}@github.com/jspiliot/error-triage-agent.git" HEAD:main
    ```
+   If this push fails (e.g. token missing write access), do not treat it
+   as fatal to the run's own findings (MRs/Slack replies already happened
+   for real), but do report it clearly in the daily summary (step 5) so
+   the cursor loss is visible rather than silent, including the cursor
+   values that failed to persist so they can be applied manually.
 
 5. Post a daily summary to `ERROR_TRIAGE_REPORT_CHANNEL_ID`. Keep it short
    — this is a Slack message, not a run log:
