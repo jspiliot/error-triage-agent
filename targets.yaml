@@ -7,6 +7,11 @@ targets:
     slack_channel_id: C08F4E0EQHE
     repo: adadot/backend-server
     branch: total-media-master
+    notes: >-
+      Single-client deployment — every request belongs to
+      org_id 798787de-04db-4bd6-91c2-547848a8a53c. Treat that as the known
+      caller context; don't flag a missing/N-A org_id in error payloads as
+      unusual or as a reason to skip identifying the actual caller.
   - name: frontend-b2b
     slack_channel_id: C08F4EQ6QU8
     repo: adadot/frontend-b2b

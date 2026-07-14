@@ -56,7 +56,11 @@ reviewer_id=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
 
 1. Load targets: `python3 scripts/load_targets.py targets.yaml`. Parse the
    JSON array; each object has `name`, `slack_channel_id`, `repo`,
-   `branch`, `max_errors_per_run`.
+   `branch`, `max_errors_per_run`, and optionally `notes` (free-text
+   context specific to that target — e.g. a known single-tenant org_id,
+   or anything else that would otherwise look like a mystery each run).
+   If a target has `notes`, factor it into that target's investigation
+   step (3.d) instead of treating well-known context as unknown.
 
 2. Resolve `reviewer_id` (see above) — abort the run (see step 5) if this
    lookup fails, since every MR needs it.
