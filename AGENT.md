@@ -8,6 +8,18 @@ Target repos live on GitLab (`gitlab.com/adadot/...`). All GitLab
 interaction uses the REST API directly via `curl` and `PRIVATE-TOKEN` auth
 — there is no `glab` CLI dependency.
 
+This repo (`error-triage-agent`) is checked out **read-only** by the
+platform from GitHub — the platform's GitHub connector does not support
+write access from this session, confirmed repeatedly (`git push` to
+`main` gets silently redirected to a `claude/*` branch; direct
+`api.github.com` calls fail with "Resource not accessible by
+integration" regardless of token). Do not attempt to push or open a PR
+against the GitHub copy for any reason. Instead, `state/cursors.json`'s
+canonical copy lives in the GitLab mirror at
+`gitlab.com/adadot/error-triage-agent` (`main` branch) — read and write
+it there via the GitLab REST API, same as the target repos, using
+`GITLAB_TOKEN`.
+
 ## Environment
 
 - `SLACK_BOT_TOKEN` — bot token with `channels:history` and `chat:write`
@@ -19,11 +31,6 @@ interaction uses the REST API directly via `curl` and `PRIVATE-TOKEN` auth
   over HTTPS.
 - `GITLAB_REVIEWER_USERNAME` — GitLab username to request as MR reviewer
   (currently `j.spiliot`).
-- `GITHUB_TOKEN` — Personal Access Token (`repo` scope) with write access
-  to *this* repo (`error-triage-agent` itself, not the GitLab targets).
-  The platform's built-in GitHub source checkout is read-only, so pushing
-  the updated `state/cursors.json` back (step 3) requires this separate
-  credential over HTTPS, the same pattern as `GITLAB_TOKEN`.
 - `DRY_RUN` — optional, `"true"` or unset. When `"true"`, never push
   branches, open MRs, or post to target-channel Slack threads; log
   intended actions to the report channel instead, each line prefixed
@@ -52,9 +59,51 @@ reviewer_id=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
   "https://gitlab.com/api/v4/users?username=$GITLAB_REVIEWER_USERNAME" | jq -r '.[0].id')
 ```
 
+## State store (state/cursors.json)
+
+The GitLab mirror's project path is fixed:
+`state_project_encoded="adadot%2Ferror-triage-agent"`.
+
+**Read** (once, at the start of the run — overwrites the local, possibly
+stale, checked-out copy with the real current state):
+
+```bash
+curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+  "https://gitlab.com/api/v4/projects/${state_project_encoded}/repository/files/state%2Fcursors.json/raw?ref=main" \
+  -o state/cursors.json
+```
+
+**Write** (once, at the end of the run — step 5; skipped entirely in
+`DRY_RUN`):
+
+```bash
+curl -s --request PUT --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data "$(python3 -c '
+import json
+with open("state/cursors.json") as f:
+    content = f.read()
+print(json.dumps({
+    "branch": "main",
+    "commit_message": "Update cursors after daily run",
+    "content": content,
+}))
+')" \
+  "https://gitlab.com/api/v4/projects/${state_project_encoded}/repository/files/state%2Fcursors.json"
+```
+
+This is a single-file commit via GitLab's Files API — no clone, no
+branch, no PR. If it fails, report the failure and the cursor values
+that didn't persist in the daily summary (step 6) rather than treating
+it as fatal to the run's own findings.
+
 ## Steps
 
-1. Load targets: `python3 scripts/load_targets.py targets.yaml`. Parse the
+1. Fetch the current `state/cursors.json` from the GitLab mirror (see
+   "State store" above) — do this before reading any cursor, so step 4.a
+   never reads the stale, read-only GitHub-checked-out copy.
+
+2. Load targets: `python3 scripts/load_targets.py targets.yaml`. Parse the
    JSON array; each object has `name`, `slack_channel_id`, `repo`,
    `branch`, `max_errors_per_run`, and optionally `notes` (free-text
    context specific to that target — e.g. a known single-tenant org_id,
@@ -62,10 +111,10 @@ reviewer_id=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
    If a target has `notes`, factor it into that target's investigation
    step (3.d) instead of treating well-known context as unknown.
 
-2. Resolve `reviewer_id` (see above) — abort the run (see step 5) if this
+3. Resolve `reviewer_id` (see above) — abort the run (see step 7) if this
    lookup fails, since every MR needs it.
 
-3. For each target, in the order given by `targets.yaml`:
+4. For each target, in the order given by `targets.yaml`:
 
    a. **Get the cursor:**
       `python3 scripts/cursor_store.py get state/cursors.json <name>`
@@ -161,41 +210,15 @@ reviewer_id=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
       actually processed (or "now" if none were processed):
       `python3 scripts/cursor_store.py set state/cursors.json <name> <timestamp>`
 
-4. After all targets are processed, persist the updated state (in
-   `DRY_RUN`, show the diff instead — skip the rest of this step). Do not
-   rely on a bare `git push` to `main`: the platform's own checkout of
-   this repo is read-only, and sessions have been observed silently
-   redirecting direct-to-`main` pushes onto a `claude/*` branch instead —
-   so push to a dedicated branch and merge it via the GitHub REST API
-   explicitly, using `GITHUB_TOKEN`, rather than assuming the push lands
-   where asked:
-   ```bash
-   git checkout -b "state-update/$(date -u +%Y%m%d-%H%M%S)"
-   git add state/cursors.json
-   git commit -m "Update cursors after daily run"
-   branch=$(git branch --show-current)
-   git push "https://${GITHUB_TOKEN}@github.com/jspiliot/error-triage-agent.git" "HEAD:$branch"
+5. After all targets are processed, persist the updated state to the
+   GitLab mirror using the **Write** call in "State store" above (in
+   `DRY_RUN`, show the diff instead — skip the write entirely). If it
+   fails, do not treat it as fatal to the run's own findings (MRs/Slack
+   replies already happened for real), but report it clearly in the daily
+   summary (step 6) — including the cursor values that failed to persist
+   so they can be applied manually.
 
-   pr_number=$(curl -s --request POST \
-     -H "Authorization: token ${GITHUB_TOKEN}" \
-     -H "Accept: application/vnd.github+json" \
-     --data "{\"title\":\"Update cursors after daily run\",\"head\":\"$branch\",\"base\":\"main\"}" \
-     "https://api.github.com/repos/jspiliot/error-triage-agent/pulls" | jq -r '.number')
-
-   curl -s --request PUT \
-     -H "Authorization: token ${GITHUB_TOKEN}" \
-     -H "Accept: application/vnd.github+json" \
-     "https://api.github.com/repos/jspiliot/error-triage-agent/pulls/${pr_number}/merge"
-   ```
-   This is pure bookkeeping (not user-facing code), so merge it
-   immediately — no human review needed for a cursor-only change. If any
-   step here fails (push, PR creation, or merge), do not treat it as
-   fatal to the run's own findings (MRs/Slack replies already happened
-   for real), but report it clearly in the daily summary (step 5) so the
-   cursor loss is visible rather than silent, including the cursor values
-   that failed to persist so they can be applied manually.
-
-5. Post a daily summary to `ERROR_TRIAGE_REPORT_CHANNEL_ID`. Keep it short
+6. Post a daily summary to `ERROR_TRIAGE_REPORT_CHANNEL_ID`. Keep it short
    — this is a Slack message, not a run log:
    - **Nothing happened anywhere** (no new errors, no MRs, no replies, no
      duplicates skipped, across all targets): post exactly one line, e.g.
@@ -212,7 +235,7 @@ reviewer_id=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
    - In `DRY_RUN`, prefix the whole message `[DRY RUN]` once at the top
      rather than repeating it per line.
 
-6. **Run-level failures** — anything not scoped to a single target (bad
+7. **Run-level failures** — anything not scoped to a single target (bad
    `SLACK_BOT_TOKEN`, bad `GITLAB_TOKEN`, reviewer lookup failure, etc.) —
    abort the run immediately and post an alert to
    `ERROR_TRIAGE_REPORT_CHANNEL_ID` describing what failed, instead of
